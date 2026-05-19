@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { X, Play, CheckCircle, XCircle, Loader, Clock } from "lucide-react";
+import { X, Play, CheckCircle, XCircle, Loader, Clock, Bot } from "lucide-react";
 import { api, createRunStream, type AgentRun, type RunStep } from "@/lib/api";
 
 interface Props {
@@ -11,9 +11,14 @@ interface Props {
   onRunEnd: (run: AgentRun) => void;
 }
 
-function StepIcon({ status }: { status: RunStep["status"] }) {
-  if (status === "running") return <Loader size={15} className="text-accent animate-spin" />;
-  if (status === "done")    return <CheckCircle size={15} className="text-green-400" />;
+function StepIcon({ status, name }: { status: RunStep["status"]; name: string }) {
+  const isAgentCall = name.startsWith("Chamando:");
+  if (status === "running") return isAgentCall
+    ? <Bot size={15} className="text-yellow-400 animate-pulse" />
+    : <Loader size={15} className="text-accent animate-spin" />;
+  if (status === "done") return isAgentCall
+    ? <Bot size={15} className="text-yellow-400" />
+    : <CheckCircle size={15} className="text-green-400" />;
   if (status === "failed")  return <XCircle size={15} className="text-red-400" />;
   return <Clock size={15} className="text-slate-600" />;
 }
@@ -119,7 +124,7 @@ export default function RunModal({ agentId, agentName, onClose, onRunStart, onRu
             )}
             {steps.map((step, i) => (
               <div key={i} className="flex items-start gap-2">
-                <div className="mt-0.5"><StepIcon status={step.status} /></div>
+                <div className="mt-0.5"><StepIcon status={step.status} name={step.name} /></div>
                 <div>
                   <p className={`text-xs font-medium ${
                     step.status === "running" ? "text-accent" :
