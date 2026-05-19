@@ -2,11 +2,12 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, LogOut, Network } from "lucide-react";
-import { api, type Agent, type Connection } from "@/lib/api";
+import { api, type Agent, type AgentRun, type Connection } from "@/lib/api";
 import AgentCard from "@/components/AgentCard";
 import dynamic from "next/dynamic";
 
 const ConnectionGraph = dynamic(() => import("@/components/ConnectionGraph"), { ssr: false });
+const RunModal = dynamic(() => import("@/components/RunModal"), { ssr: false });
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -16,9 +17,12 @@ export default function DashboardPage() {
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
 
+  // Runner state
+  const [activeRuns, setActiveRuns] = useState<Record<string, AgentRun>>({});  // agentId -> run
+  const [runModalAgent, setRunModalAgent] = useState<Agent | null>(null);
+
   useEffect(() => {
-    api.auth.me()
-      .catch(() => router.replace("/login"));
+    api.auth.me().catch(() => router.replace("/login"));
     Promise.all([api.agents.list(), api.connections.list()]).then(([a, c]) => {
       setAgents(a);
       setConnections(c);
@@ -38,6 +42,7 @@ export default function DashboardPage() {
     await api.agents.delete(id);
     setAgents((prev) => prev.filter((a) => a.id !== id));
     setConnections((prev) => prev.filter((c) => c.source_id !== id && c.target_id !== id));
+    setActiveRuns((prev) => { const next = { ...prev }; delete next[id]; return next; });
   }
 
   async function handleConnect(sourceId: string, targetId: string) {
@@ -48,6 +53,18 @@ export default function DashboardPage() {
   async function handleDisconnect(connectionId: string) {
     await api.connections.delete(connectionId);
     setConnections((prev) => prev.filter((c) => c.id !== connectionId));
+  }
+
+  function handleRunStart(agentId: string, run: AgentRun) {
+    setActiveRuns((prev) => ({ ...prev, [agentId]: run }));
+  }
+
+  function handleRunEnd(agentId: string, run: AgentRun) {
+    setActiveRuns((prev) => ({ ...prev, [agentId]: run }));
+  }
+
+  function openRunModal(agent: Agent) {
+    setRunModalAgent(agent);
   }
 
   async function logout() {
@@ -63,9 +80,7 @@ export default function DashboardPage() {
           <button
             onClick={() => setShowGraph((v) => !v)}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg border text-sm transition-colors ${
-              showGraph
-                ? "border-accent bg-accent/10 text-accent"
-                : "border-border text-slate-400 hover:border-slate-500"
+              showGraph ? "border-accent bg-accent/10 text-accent" : "border-border text-slate-400 hover:border-slate-500"
             }`}
           >
             <Network size={15} />
@@ -95,12 +110,8 @@ export default function DashboardPage() {
               maxLength={100}
               className="flex-1 px-4 py-2.5 bg-card border border-accent rounded-lg text-white placeholder-slate-500 focus:outline-none"
             />
-            <button type="submit" className="px-4 py-2.5 bg-accent hover:bg-accent-hover text-white rounded-lg transition-colors text-sm">
-              Create
-            </button>
-            <button type="button" onClick={() => setCreating(false)} className="px-4 py-2.5 border border-border text-slate-400 hover:text-white rounded-lg transition-colors text-sm">
-              Cancel
-            </button>
+            <button type="submit" className="px-4 py-2.5 bg-accent hover:bg-accent-hover text-white rounded-lg text-sm">Create</button>
+            <button type="button" onClick={() => setCreating(false)} className="px-4 py-2.5 border border-border text-slate-400 hover:text-white rounded-lg text-sm">Cancel</button>
           </form>
         )}
 
@@ -129,13 +140,31 @@ export default function DashboardPage() {
               <AgentCard
                 key={agent.id}
                 agent={agent}
-                onClick={() => router.push(`/dashboard/agent/${agent.id}`)}
+                isRunning={activeRuns[agent.id]?.status === "running"}
+                onClick={() => {
+                  if (activeRuns[agent.id]) {
+                    openRunModal(agent);
+                  } else {
+                    router.push(`/dashboard/agent/${agent.id}`);
+                  }
+                }}
                 onDelete={() => deleteAgent(agent.id)}
+                onRun={() => openRunModal(agent)}
               />
             ))}
           </div>
         )}
       </main>
+
+      {runModalAgent && (
+        <RunModal
+          agentId={runModalAgent.id}
+          agentName={runModalAgent.name}
+          onClose={() => setRunModalAgent(null)}
+          onRunStart={(run) => handleRunStart(runModalAgent.id, run)}
+          onRunEnd={(run) => handleRunEnd(runModalAgent.id, run)}
+        />
+      )}
     </div>
   );
 }

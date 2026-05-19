@@ -21,6 +21,7 @@ class Agent(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     owner = relationship("User", back_populates="agents")
+    runs = relationship("AgentRun", back_populates="agent", cascade="all, delete-orphan")
     outgoing = relationship(
         "AgentConnection",
         foreign_keys="AgentConnection.source_id",

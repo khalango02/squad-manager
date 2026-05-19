@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     allowed_origins: list[str] = ["http://localhost:3000"]
     environment: str = "development"
     max_request_body_bytes: int = 2 * 1024 * 1024  # 2 MB
+    anthropic_api_key: str
+    claude_model: str = "claude-sonnet-4-6"
 
     class Config:
         env_file = ".env"

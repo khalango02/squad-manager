@@ -58,6 +58,29 @@ export type Connection = {
   created_at: string;
 };
 
+export type RunStep = {
+  name: string;
+  status: "pending" | "running" | "done" | "failed";
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+export type AgentRun = {
+  id: string;
+  agent_id: string;
+  status: "queued" | "running" | "done" | "failed";
+  steps: RunStep[];
+  output: string;
+  created_at: string;
+  finished_at: string | null;
+};
+
+const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+export function createRunStream(runId: string): EventSource {
+  return new EventSource(`${BASE}/runs/${runId}/stream`, { withCredentials: true });
+}
+
 export const api = {
   auth: {
     login: (email: string, password: string) =>
@@ -81,6 +104,15 @@ export const api = {
     update: (id: string, data: Partial<Pick<Agent, "name" | "description" | "md_content">>) =>
       request<Agent>(`/agents/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
     delete: (id: string) => request<void>(`/agents/${id}`, { method: "DELETE" }),
+  },
+  runs: {
+    create: (agentId: string, input: string) =>
+      request<AgentRun>(`/runs/agents/${agentId}`, {
+        method: "POST",
+        body: JSON.stringify({ input }),
+      }),
+    list: (agentId: string) => request<AgentRun[]>(`/runs/agents/${agentId}`),
+    get: (runId: string) => request<AgentRun>(`/runs/${runId}`),
   },
   connections: {
     list: () => request<Connection[]>("/connections/"),
