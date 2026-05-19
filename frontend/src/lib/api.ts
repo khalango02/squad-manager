@@ -75,6 +75,16 @@ export type AgentRun = {
   finished_at: string | null;
 };
 
+export type Skill = {
+  id: string;
+  owner_id: string;
+  name: string;
+  description: string | null;
+  content: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export function createRunStream(runId: string): EventSource {
   return new EventSource(`${BASE}/runs/${runId}/stream`, { withCredentials: true });
 }
@@ -117,5 +127,19 @@ export const api = {
     create: (data: { source_id: string; target_id: string; label?: string }) =>
       request<Connection>("/connections/", { method: "POST", body: JSON.stringify(data) }),
     delete: (id: string) => request<void>(`/connections/${id}`, { method: "DELETE" }),
+  },
+  skills: {
+    list: () => request<Skill[]>("/skills/"),
+    get: (id: string) => request<Skill>(`/skills/${id}`),
+    create: (data: { name: string; description?: string; content?: string }) =>
+      request<Skill>("/skills/", { method: "POST", body: JSON.stringify(data) }),
+    update: (id: string, data: Partial<Pick<Skill, "name" | "description" | "content">>) =>
+      request<Skill>(`/skills/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    delete: (id: string) => request<void>(`/skills/${id}`, { method: "DELETE" }),
+    listForAgent: (agentId: string) => request<Skill[]>(`/agents/${agentId}/skills`),
+    attach: (agentId: string, skillId: string) =>
+      request<Skill[]>(`/agents/${agentId}/skills/${skillId}`, { method: "POST" }),
+    detach: (agentId: string, skillId: string) =>
+      request<Skill[]>(`/agents/${agentId}/skills/${skillId}`, { method: "DELETE" }),
   },
 };

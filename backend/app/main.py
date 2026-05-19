@@ -10,7 +10,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import settings
 from app.database import Base, engine
-from app.routes import agents, auth, connections, runs
+from app.routes import agents, auth, connections, runs, skills
 
 logging.basicConfig(
     level=logging.INFO,
@@ -70,6 +70,7 @@ app.include_router(auth.router)
 app.include_router(agents.router)
 app.include_router(connections.router)
 app.include_router(runs.router)
+app.include_router(skills.router)
 
 
 @app.get("/health")

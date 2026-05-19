@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, LogOut, Network } from "lucide-react";
+import { Plus, LogOut, Network, Zap } from "lucide-react";
 import { api, type Agent, type AgentRun, type Connection } from "@/lib/api";
 import AgentCard from "@/components/AgentCard";
 import dynamic from "next/dynamic";
@@ -77,6 +77,13 @@ export default function DashboardPage() {
       <header className="border-b border-border px-8 py-4 flex items-center justify-between">
         <h1 className="text-lg font-bold text-white">Squad Manager</h1>
         <div className="flex items-center gap-3">
+          <button
+            onClick={() => router.push("/dashboard/skills")}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border text-slate-400 hover:border-slate-500 text-sm transition-colors"
+          >
+            <Zap size={15} />
+            Skills
+          </button>
           <button
             onClick={() => setShowGraph((v) => !v)}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg border text-sm transition-colors ${

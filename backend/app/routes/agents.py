@@ -5,8 +5,8 @@ from sqlalchemy.orm import Session
 
 from app.auth.jwt import get_current_user
 from app.database import get_db
-from app.models import Agent, User
-from app.schemas import AgentCreate, AgentOut, AgentUpdate
+from app.models import Agent, Skill, User
+from app.schemas import AgentCreate, AgentOut, AgentUpdate, SkillOut
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -69,3 +69,51 @@ def delete_agent(
         raise HTTPException(status_code=404, detail="Agent not found")
     db.delete(agent)
     db.commit()
+
+
+@router.get("/{agent_id}/skills", response_model=list[SkillOut])
+def list_agent_skills(
+    agent_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    agent = db.query(Agent).filter(Agent.id == agent_id, Agent.owner_id == current_user.id).first()
+    if not agent:
+        raise HTTPException(404, "Agent not found")
+    return agent.skills
+
+
+@router.post("/{agent_id}/skills/{skill_id}", response_model=list[SkillOut], status_code=status.HTTP_200_OK)
+def attach_skill(
+    agent_id: UUID,
+    skill_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    agent = db.query(Agent).filter(Agent.id == agent_id, Agent.owner_id == current_user.id).first()
+    if not agent:
+        raise HTTPException(404, "Agent not found")
+    skill = db.query(Skill).filter(Skill.id == skill_id, Skill.owner_id == current_user.id).first()
+    if not skill:
+        raise HTTPException(404, "Skill not found")
+    if skill not in agent.skills:
+        agent.skills.append(skill)
+        db.commit()
+    return agent.skills
+
+
+@router.delete("/{agent_id}/skills/{skill_id}", response_model=list[SkillOut])
+def detach_skill(
+    agent_id: UUID,
+    skill_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    agent = db.query(Agent).filter(Agent.id == agent_id, Agent.owner_id == current_user.id).first()
+    if not agent:
+        raise HTTPException(404, "Agent not found")
+    skill = db.query(Skill).filter(Skill.id == skill_id).first()
+    if skill and skill in agent.skills:
+        agent.skills.remove(skill)
+        db.commit()
+    return agent.skills

@@ -98,7 +98,13 @@ def _db_get_run_and_agent(run_id: str):
         if not run:
             return None, None
         agent = db.query(Agent).filter(Agent.id == run.agent_id).first()
-        return (run.input, agent.md_content if agent else "")
+        if not agent:
+            return (run.input, "")
+        parts = [agent.md_content or ""]
+        for skill in agent.skills:
+            if skill.content:
+                parts.append(f"## Skill: {skill.name}\n{skill.content}")
+        return (run.input, "\n\n---\n\n".join(p for p in parts if p))
     finally:
         db.close()
 

@@ -7,6 +7,7 @@ import uuid
 
 from app.auth.encryption import EncryptedText
 from app.database import Base
+from app.models.skill import agent_skills
 
 
 class Agent(Base):
@@ -22,6 +23,7 @@ class Agent(Base):
 
     owner = relationship("User", back_populates="agents")
     runs = relationship("AgentRun", back_populates="agent", cascade="all, delete-orphan")
+    skills = relationship("Skill", secondary=agent_skills, lazy="select")
     outgoing = relationship(
         "AgentConnection",
         foreign_keys="AgentConnection.source_id",

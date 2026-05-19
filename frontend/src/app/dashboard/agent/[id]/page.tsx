@@ -1,9 +1,9 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Save } from "lucide-react";
+import { ArrowLeft, Save, Plus, X, Zap } from "lucide-react";
 import dynamic from "next/dynamic";
-import { api, type Agent } from "@/lib/api";
+import { api, type Agent, type Skill } from "@/lib/api";
 
 const MDEditor = dynamic(() => import("@uiw/react-md-editor"), { ssr: false });
 
@@ -18,6 +18,10 @@ export default function AgentEditorPage() {
   const [saved, setSaved] = useState(false);
   const saveTimeout = useRef<ReturnType<typeof setTimeout>>(undefined);
 
+  const [attachedSkills, setAttachedSkills] = useState<Skill[]>([]);
+  const [allSkills, setAllSkills] = useState<Skill[]>([]);
+  const [showSkillPicker, setShowSkillPicker] = useState(false);
+
   useEffect(() => {
     api.agents.get(id).then((a) => {
       setAgent(a);
@@ -25,6 +29,8 @@ export default function AgentEditorPage() {
       setDescription(a.description ?? "");
       setContent(a.md_content);
     });
+    api.skills.listForAgent(id).then(setAttachedSkills);
+    api.skills.list().then(setAllSkills);
   }, [id]);
 
   function scheduleSave(nextContent: string) {
@@ -45,6 +51,20 @@ export default function AgentEditorPage() {
     setSaving(false);
     setSaved(true);
   }
+
+  async function attachSkill(skill: Skill) {
+    const updated = await api.skills.attach(id, skill.id);
+    setAttachedSkills(updated);
+    setShowSkillPicker(false);
+  }
+
+  async function detachSkill(skillId: string) {
+    const updated = await api.skills.detach(id, skillId);
+    setAttachedSkills(updated);
+  }
+
+  const attachedIds = new Set(attachedSkills.map((s) => s.id));
+  const availableToAttach = allSkills.filter((s) => !attachedIds.has(s.id));
 
   if (!agent) {
     return (
@@ -86,12 +106,72 @@ export default function AgentEditorPage() {
         </div>
       </header>
 
+      {/* Skills bar */}
+      <div className="border-b border-border px-8 py-3 flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-1.5 text-xs font-medium text-slate-500 uppercase tracking-wider shrink-0">
+          <Zap size={12} />
+          Skills
+        </div>
+
+        {attachedSkills.map((skill) => (
+          <span
+            key={skill.id}
+            className="flex items-center gap-1.5 px-3 py-1 bg-accent/10 border border-accent/30 text-accent text-xs rounded-full"
+          >
+            {skill.name}
+            <button
+              onClick={() => detachSkill(skill.id)}
+              className="hover:text-white transition-colors"
+            >
+              <X size={11} />
+            </button>
+          </span>
+        ))}
+
+        <div className="relative">
+          <button
+            onClick={() => setShowSkillPicker((v) => !v)}
+            disabled={availableToAttach.length === 0}
+            className="flex items-center gap-1 px-2.5 py-1 border border-dashed border-border text-slate-500 hover:border-slate-500 hover:text-slate-300 text-xs rounded-full transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            <Plus size={11} />
+            Adicionar
+          </button>
+
+          {showSkillPicker && availableToAttach.length > 0 && (
+            <div className="absolute top-full left-0 mt-2 w-56 bg-card border border-border rounded-xl shadow-xl z-10 overflow-hidden">
+              {availableToAttach.map((skill) => (
+                <button
+                  key={skill.id}
+                  onClick={() => attachSkill(skill)}
+                  className="w-full text-left px-4 py-2.5 text-sm text-slate-300 hover:bg-surface hover:text-white transition-colors"
+                >
+                  <p className="font-medium">{skill.name}</p>
+                  {skill.description && (
+                    <p className="text-xs text-slate-500 truncate">{skill.description}</p>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {allSkills.length === 0 && (
+          <button
+            onClick={() => router.push("/dashboard/skills")}
+            className="text-xs text-slate-600 hover:text-slate-400 transition-colors"
+          >
+            Criar skills →
+          </button>
+        )}
+      </div>
+
       <div className="flex-1 p-8" data-color-mode="dark">
         <MDEditor
           value={content}
           onChange={(val) => scheduleSave(val ?? "")}
           height="100%"
-          style={{ minHeight: "calc(100vh - 140px)", background: "#1a1d27" }}
+          style={{ minHeight: "calc(100vh - 200px)", background: "#1a1d27" }}
         />
       </div>
     </div>
