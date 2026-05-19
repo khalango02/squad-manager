@@ -5,8 +5,9 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 import jwt
+from argon2 import PasswordHasher
+from argon2.exceptions import VerificationError, VerifyMismatchError
 from fastapi import Cookie, Depends, Header, HTTPException, status
-from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -14,7 +15,7 @@ from app.database import get_db
 from app.models import RefreshToken, User
 
 logger = logging.getLogger(__name__)
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+_ph = PasswordHasher(time_cost=2, memory_cost=65536, parallelism=2)
 
 ACCESS_COOKIE = "squad_token"
 REFRESH_COOKIE = "squad_refresh"
@@ -23,11 +24,14 @@ LOCKOUT_MINUTES = 15
 
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    return _ph.hash(password)
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    try:
+        return _ph.verify(hashed, plain)
+    except (VerifyMismatchError, VerificationError):
+        return False
 
 
 def _hash_token(raw: str) -> str:

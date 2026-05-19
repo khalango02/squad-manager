@@ -66,9 +66,9 @@ def login(
 ):
     user = db.query(User).filter(User.email == payload.email).first()
 
-    # Always run bcrypt to prevent user-enumeration via timing
-    dummy_hash = "$2b$12$placeholderforuserthatdoesnotexist.XXXXXXXXXXXXXXXXXXXXXXX"
-    password_ok = verify_password(payload.password, user.password_hash if user else dummy_hash)
+    # Always run argon2 to prevent user-enumeration via timing
+    _DUMMY_HASH = "$argon2id$v=19$m=65536,t=2,p=2$dummysaltdummysaltdummy$dummyhashvaluedummyhashvaluedummy"
+    password_ok = verify_password(payload.password, user.password_hash if user else _DUMMY_HASH)
 
     if not user or not password_ok:
         if user:
