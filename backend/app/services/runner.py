@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-import re
 from collections import defaultdict
 from datetime import datetime, timezone
 
@@ -21,11 +20,6 @@ _claude = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
 def _is_billing_error(exc: Exception) -> bool:
     msg = str(exc).lower()
     return "credit balance" in msg or "insufficient_quota" in msg or "billing" in msg
-
-
-def _sanitize_tool_name(name: str, agent_id: str) -> str:
-    safe = re.sub(r"[^a-zA-Z0-9_-]", "_", name)[:48]
-    return f"agent_{safe}_{agent_id[-6:]}"
 
 
 # ── Pub/sub ───────────────────────────────────────────────────────────────────
@@ -105,67 +99,74 @@ def _build_system_prompt(agent: Agent) -> str:
     return "\n\n---\n\n".join(p for p in parts if p)
 
 
-def _db_get_run_and_agent(run_id: str):
-    """Returns (user_input, system_prompt, connected_agents) or (None, None, [])."""
+def _db_get_run_chain(run_id: str):
+    """
+    Returns (user_input, agent_chain) where agent_chain is an ordered list of
+    agent dicts following the first outgoing connection at each step.
+    """
     db = SessionLocal()
     try:
         run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
         if not run:
-            return None, None, []
+            return None, []
 
-        agent = db.query(Agent).filter(Agent.id == run.agent_id).first()
-        if not agent:
-            return (run.input, "", [])
+        chain = []
+        visited: set[str] = set()
+        current_id: str | None = str(run.agent_id)
 
-        system_prompt = _build_system_prompt(agent) or "You are a helpful assistant."
+        while current_id and current_id not in visited:
+            visited.add(current_id)
+            agent = db.query(Agent).filter(Agent.id == current_id).first()
+            if not agent:
+                break
 
-        connected = []
-        for conn in agent.outgoing:
-            target = conn.target
-            if not target:
-                continue
-            connected.append({
-                "id": str(target.id),
-                "tool_name": _sanitize_tool_name(target.name, str(target.id)),
-                "name": target.name,
-                "description": target.description or "",
-                "system_prompt": _build_system_prompt(target) or "You are a helpful assistant.",
+            chain.append({
+                "id": str(agent.id),
+                "name": agent.name,
+                "system_prompt": _build_system_prompt(agent) or "You are a helpful assistant.",
             })
 
-        return (run.input, system_prompt, connected)
+            # Follow the first outgoing connection (linear chain)
+            outgoing = sorted(agent.outgoing, key=lambda c: c.created_at)
+            current_id = str(outgoing[0].target_id) if outgoing else None
+
+        return (run.input, chain)
     finally:
         db.close()
 
 
 # ── LLM helpers ───────────────────────────────────────────────────────────────
 
-async def _openai_stream(system_prompt: str, messages: list, output_parts: list, run_id: str, step_index: int) -> None:
-    """Stream OpenAI response tokens into output_parts and publish to SSE."""
-    _openai_client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
-    oai_messages = [{"role": "system", "content": system_prompt}] + [
-        {"role": m["role"], "content": m["content"]}
-        for m in messages
-        if isinstance(m.get("content"), str)
-    ]
-    stream = await _openai_client.chat.completions.create(
+async def _openai_stream(
+    system_prompt: str,
+    user_input: str,
+    output_parts: list[str],
+    run_id: str,
+    step_idx: int,
+) -> None:
+    client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
+    stream = await client.chat.completions.create(
         model=settings.openai_model,
         max_tokens=8096,
-        messages=oai_messages,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_input},
+        ],
         stream=True,
     )
     async for chunk in stream:
         text = chunk.choices[0].delta.content or ""
         if text:
             output_parts.append(text)
-            await publish(run_id, {"type": "token", "content": text, "index": step_index})
+            await publish(run_id, {"type": "token", "content": text, "index": step_idx})
 
 
-async def _call_sub_agent(system_prompt: str, user_input: str) -> str:
-    """Calls a connected agent and returns its full text response (no streaming)."""
+async def _call_agent_full(system_prompt: str, user_input: str) -> str:
+    """Calls an agent without streaming (for non-first agents in the chain)."""
     try:
         response = await _claude.messages.create(
             model=settings.claude_model,
-            max_tokens=4096,
+            max_tokens=8096,
             system=system_prompt,
             messages=[{"role": "user", "content": user_input}],
         )
@@ -175,10 +176,10 @@ async def _call_sub_agent(system_prompt: str, user_input: str) -> str:
         )
     except Exception as exc:
         if _is_billing_error(exc) and settings.openai_api_key:
-            _openai_client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
-            resp = await _openai_client.chat.completions.create(
+            client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
+            resp = await client.chat.completions.create(
                 model=settings.openai_model,
-                max_tokens=4096,
+                max_tokens=8096,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_input},
@@ -192,15 +193,17 @@ async def _call_sub_agent(system_prompt: str, user_input: str) -> str:
 
 async def execute_run(run_id: str) -> None:
     try:
-        user_input, system_prompt, connected_agents = await asyncio.to_thread(
-            _db_get_run_and_agent, run_id
-        )
-        if user_input is None:
+        user_input, agent_chain = await asyncio.to_thread(_db_get_run_chain, run_id)
+        if not agent_chain:
             return
 
-        # ── Step 1: Loading context ───────────────────────────────────────
-        step_load = {"name": "Carregando contexto", "status": "running",
-                     "started_at": _now_iso(), "finished_at": None}
+        # ── Step 0: Loading context ───────────────────────────────────────
+        step_load = {
+            "name": "Carregando contexto",
+            "status": "running",
+            "started_at": _now_iso(),
+            "finished_at": None,
+        }
         steps = [step_load]
         await asyncio.to_thread(_db_update, run_id, status="running", steps=steps)
         await publish(run_id, {"type": "step_update", "step": step_load, "index": 0})
@@ -211,148 +214,98 @@ async def execute_run(run_id: str) -> None:
         await asyncio.to_thread(_db_update, run_id, steps=steps)
         await publish(run_id, {"type": "step_update", "step": step_load, "index": 0})
 
-        # ── Step 2: Processing ────────────────────────────────────────────
-        step_proc = {"name": "Processando", "status": "running",
-                     "started_at": _now_iso(), "finished_at": None}
-        steps = [step_load, step_proc]
-        await asyncio.to_thread(_db_update, run_id, steps=steps)
-        await publish(run_id, {"type": "step_update", "step": step_proc, "index": 1})
-
-        output_parts: list[str] = []
-
-        # Build tool definitions from connected agents
-        tool_defs = [
-            {
-                "name": ca["tool_name"],
-                "description": (
-                    f"Call agent '{ca['name']}'"
-                    + (f": {ca['description']}" if ca["description"] else "")
-                ),
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "input": {
-                            "type": "string",
-                            "description": "The task or question to send to this agent",
-                        }
-                    },
-                    "required": ["input"],
-                },
-            }
-            for ca in connected_agents
-        ]
-        tool_map = {ca["tool_name"]: ca for ca in connected_agents}
+        # ── Pipeline: run each agent in chain ─────────────────────────────
+        current_input = user_input
+        final_output = ""
 
         try:
-            used_fallback = False
-            messages: list = [{"role": "user", "content": user_input}]
-            call_steps: list[dict] = []  # steps added by agent-to-agent calls
+            for i, agent_info in enumerate(agent_chain):
+                step_name = "Processando" if i == 0 else f"Chamando: {agent_info['name']}"
+                step = {
+                    "name": step_name,
+                    "agent_id": agent_info["id"],
+                    "status": "running",
+                    "started_at": _now_iso(),
+                    "finished_at": None,
+                }
+                step_idx = i + 1
+                steps = steps[:step_idx] + [step]
+                await asyncio.to_thread(_db_update, run_id, steps=steps)
+                await publish(run_id, {"type": "step_update", "step": step, "index": step_idx})
 
-            # ── Agentic loop (handles tool calls) ────────────────────────
-            for iteration in range(10):  # max 10 tool-call rounds
-                try:
-                    async with _claude.messages.stream(
-                        model=settings.claude_model,
-                        max_tokens=8096,
-                        system=system_prompt,
-                        tools=tool_defs if tool_defs else anthropic.NOT_GIVEN,
-                        messages=messages,
-                    ) as stream:
-                        async for text in stream.text_stream:
-                            output_parts.append(text)
-                            await publish(run_id, {"type": "token", "content": text, "index": 1})
+                if i == 0:
+                    # First agent: stream tokens live
+                    output_parts: list[str] = []
+                    try:
+                        async with _claude.messages.stream(
+                            model=settings.claude_model,
+                            max_tokens=8096,
+                            system=agent_info["system_prompt"],
+                            messages=[{"role": "user", "content": current_input}],
+                        ) as stream:
+                            async for text in stream.text_stream:
+                                output_parts.append(text)
+                                await publish(run_id, {
+                                    "type": "token",
+                                    "content": text,
+                                    "index": step_idx,
+                                })
+                    except Exception as exc:
+                        if not _is_billing_error(exc) or not settings.openai_api_key:
+                            raise
+                        output_parts.clear()
+                        await publish(run_id, {"type": "fallback", "provider": "openai"})
+                        await _openai_stream(
+                            agent_info["system_prompt"], current_input,
+                            output_parts, run_id, step_idx,
+                        )
 
-                        final_msg = await stream.get_final_message()
+                    agent_output = "".join(output_parts)
 
-                except Exception as exc:
-                    if not _is_billing_error(exc) or not settings.openai_api_key:
-                        raise
-                    # Fallback to OpenAI (no tool use support in fallback)
-                    logger.warning("Run %s: Anthropic billing error, falling back to OpenAI", run_id)
-                    output_parts.clear()
-                    used_fallback = True
-                    await publish(run_id, {"type": "fallback", "provider": "openai"})
-                    await _openai_stream(system_prompt, messages, output_parts, run_id, 1)
-                    break  # OpenAI path done, no tool loop
+                else:
+                    # Subsequent agents: run fully (output becomes next input)
+                    agent_output = await _call_agent_full(
+                        agent_info["system_prompt"], current_input
+                    )
 
-                if final_msg.stop_reason != "tool_use":
-                    break  # Claude finished naturally
+                # Publish this agent's completed output
+                await publish(run_id, {
+                    "type": "agent_output",
+                    "agent_id": agent_info["id"],
+                    "agent_name": agent_info["name"],
+                    "content": agent_output,
+                })
 
-                # ── Handle tool calls ─────────────────────────────────────
-                tool_results = []
-                for block in final_msg.content:
-                    if block.type != "tool_use":
-                        continue
-                    ca = tool_map.get(block.name)
-                    if not ca:
-                        continue
+                step = {**step, "status": "done", "finished_at": _now_iso()}
+                steps[step_idx] = step
+                await asyncio.to_thread(_db_update, run_id, steps=steps)
+                await publish(run_id, {"type": "step_update", "step": step, "index": step_idx})
 
-                    step_call_idx = 2 + len(call_steps)
-                    step_call = {
-                        "name": f"Chamando: {ca['name']}",
-                        "status": "running",
-                        "started_at": _now_iso(),
-                        "finished_at": None,
-                    }
-                    call_steps.append(step_call)
-                    all_steps = [step_load, step_proc] + call_steps
-                    await asyncio.to_thread(_db_update, run_id, steps=all_steps)
-                    await publish(run_id, {
-                        "type": "step_update", "step": step_call, "index": step_call_idx,
-                    })
-
-                    sub_input = block.input.get("input", "") if isinstance(block.input, dict) else ""
-                    logger.info("Run %s: calling sub-agent '%s'", run_id, ca["name"])
-                    sub_result = await _call_sub_agent(ca["system_prompt"], sub_input)
-
-                    step_call = {**step_call, "status": "done", "finished_at": _now_iso()}
-                    call_steps[-1] = step_call
-                    all_steps = [step_load, step_proc] + call_steps
-                    await asyncio.to_thread(_db_update, run_id, steps=all_steps)
-                    await publish(run_id, {
-                        "type": "step_update", "step": step_call, "index": step_call_idx,
-                    })
-                    await publish(run_id, {
-                        "type": "agent_output",
-                        "agent_id": ca["id"],
-                        "agent_name": ca["name"],
-                        "content": sub_result,
-                    })
-
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": sub_result,
-                    })
-
-                messages.append({"role": "assistant", "content": final_msg.content})
-                messages.append({"role": "user", "content": tool_results})
+                current_input = agent_output  # chain: this agent's output → next agent's input
+                final_output = agent_output
 
             # ── Finalize ──────────────────────────────────────────────────
-            step_proc = {**step_proc, "status": "done", "finished_at": _now_iso()}
-            full_output = "".join(output_parts)
-            final_steps = [step_load, step_proc] + call_steps
             await asyncio.to_thread(
                 _db_update, run_id,
-                steps=final_steps,
-                output=full_output,
+                steps=steps,
+                output=final_output,
                 status="done",
                 finished_at=datetime.now(timezone.utc),
             )
-            await publish(run_id, {"type": "step_update", "step": step_proc, "index": 1})
-            await publish(run_id, {"type": "done", "output": full_output})
+            await publish(run_id, {"type": "done", "output": final_output})
 
         except Exception as exc:
-            logger.exception("Run %s failed during LLM call: %s", run_id, exc)
-            step_proc = {**step_proc, "status": "failed", "finished_at": _now_iso()}
-            final_steps = [step_load, step_proc] + call_steps
+            logger.exception("Run %s failed: %s", run_id, exc)
+            failed_step = steps[-1] if steps else step_load
+            failed_step = {**failed_step, "status": "failed", "finished_at": _now_iso()}
+            steps[-1] = failed_step
             await asyncio.to_thread(
                 _db_update, run_id,
-                steps=final_steps,
+                steps=steps,
                 status="failed",
                 finished_at=datetime.now(timezone.utc),
             )
-            await publish(run_id, {"type": "step_update", "step": step_proc, "index": 1})
+            await publish(run_id, {"type": "step_update", "step": failed_step, "index": len(steps) - 1})
             await publish(run_id, {"type": "error", "message": str(exc)})
 
     except Exception as exc:

@@ -90,24 +90,35 @@ export default function DashboardPage() {
     es.onmessage = (e) => {
       const event = JSON.parse(e.data);
 
-      if (event.type === "token") {
+      if (event.type === "step_update" && event.step?.agent_id) {
+        // Light up the correct graph node based on the step's agent_id
+        const stepAgentId: string = event.step.agent_id;
+        if (event.step.status === "running") {
+          setAgentStates((prev) => ({ ...prev, [stepAgentId]: "running" }));
+        } else if (event.step.status === "done") {
+          setAgentStates((prev) => ({ ...prev, [stepAgentId]: "done" }));
+        } else if (event.step.status === "failed") {
+          setAgentStates((prev) => ({ ...prev, [stepAgentId]: "failed" }));
+        }
+
+      } else if (event.type === "token") {
         setMainTokens((prev) => prev + event.content);
 
       } else if (event.type === "agent_output") {
+        // Each agent in the chain publishes agent_output when it finishes
         setAgentStates((prev) => ({ ...prev, [event.agent_id]: "done" }));
+        setMainTokens("");
         setExecBlocks((prev) => [
           ...prev,
-          { type: "sub", agentId: event.agent_id, agentName: event.agent_name, content: event.content },
+          {
+            type: event.agent_id === agentId ? "main" : "sub",
+            agentId: event.agent_id,
+            agentName: event.agent_name,
+            content: event.content,
+          },
         ]);
 
       } else if (event.type === "done") {
-        const agentName = agents.find((a) => a.id === agentId)?.name ?? "Agent";
-        setAgentStates((prev) => ({ ...prev, [agentId]: "done" }));
-        setExecBlocks((prev) => [
-          ...prev,
-          { type: "main", agentId, agentName, content: event.output },
-        ]);
-        setMainTokens("");
         es.close();
 
       } else if (event.type === "error") {
