@@ -17,7 +17,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 
-settings.validate_secret()
+settings.validate_secrets()
 Base.metadata.create_all(bind=engine)
 
 limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
@@ -25,7 +25,6 @@ limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
 app = FastAPI(
     title="Squad Manager API",
     version="1.0.0",
-    # Disable interactive docs in production
     docs_url=None if settings.is_production else "/docs",
     redoc_url=None if settings.is_production else "/redoc",
     openapi_url=None if settings.is_production else "/openapi.json",
@@ -48,7 +47,17 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
+class BodySizeLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.headers.get("content-length"):
+            length = int(request.headers["content-length"])
+            if length > settings.max_request_body_bytes:
+                return JSONResponse(status_code=413, content={"detail": "Request body too large"})
+        return await call_next(request)
+
+
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(BodySizeLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,

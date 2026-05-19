@@ -1,10 +1,11 @@
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import uuid
 
+from app.auth.encryption import EncryptedText
 from app.database import Base
 
 
@@ -15,7 +16,7 @@ class Agent(Base):
     owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     name = Column(String(100), nullable=False)
     description = Column(String(255))
-    md_content = Column(Text, default="")
+    md_content = Column(EncryptedText, default="")   # AES-128 encrypted at rest
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

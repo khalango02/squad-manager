@@ -1,14 +1,30 @@
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, isRetry = false): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...init,
-    credentials: "include", // send httpOnly cookie automatically
+    credentials: "include", // sends httpOnly cookies automatically
     headers: {
       "Content-Type": "application/json",
       ...init?.headers,
     },
   });
+
+  // Auto-refresh on 401: try once to rotate the refresh token, then retry
+  if (res.status === 401 && !isRetry && path !== "/auth/login" && path !== "/auth/refresh") {
+    const refreshed = await fetch(`${BASE}/auth/refresh`, {
+      method: "POST",
+      credentials: "include",
+    });
+    if (refreshed.ok) {
+      return request(path, init, true);
+    }
+    if (typeof window !== "undefined") {
+      window.location.href = "/login";
+    }
+    throw new Error("Session expired");
+  }
+
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail ?? "Request failed");
