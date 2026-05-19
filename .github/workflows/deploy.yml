@@ -1,0 +1,51 @@
+name: Build & Deploy to Azure
+
+on:
+  push:
+    branches: [main]
+
+env:
+  ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}       # e.g. squadmanager.azurecr.io
+  RESOURCE_GROUP: ${{ secrets.RESOURCE_GROUP }}
+  BACKEND_APP: squad-manager-backend
+  FRONTEND_APP: squad-manager-frontend
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Login to ACR
+        run: az acr login --name ${{ secrets.ACR_NAME }}
+
+      - name: Build & push backend
+        run: |
+          docker build -t $ACR_REGISTRY/$BACKEND_APP:$GITHUB_SHA ./backend
+          docker push $ACR_REGISTRY/$BACKEND_APP:$GITHUB_SHA
+
+      - name: Build & push frontend
+        run: |
+          docker build \
+            --build-arg NEXT_PUBLIC_API_URL=${{ secrets.API_URL }} \
+            -t $ACR_REGISTRY/$FRONTEND_APP:$GITHUB_SHA ./frontend
+          docker push $ACR_REGISTRY/$FRONTEND_APP:$GITHUB_SHA
+
+      - name: Deploy backend to Container Apps
+        run: |
+          az containerapp update \
+            --name $BACKEND_APP \
+            --resource-group $RESOURCE_GROUP \
+            --image $ACR_REGISTRY/$BACKEND_APP:$GITHUB_SHA
+
+      - name: Deploy frontend to Container Apps
+        run: |
+          az containerapp update \
+            --name $FRONTEND_APP \
+            --resource-group $RESOURCE_GROUP \
+            --image $ACR_REGISTRY/$FRONTEND_APP:$GITHUB_SHA
