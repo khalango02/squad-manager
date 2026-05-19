@@ -11,6 +11,10 @@ interface Props {
   onRunEnd: (run: AgentRun) => void;
 }
 
+type OutputBlock =
+  | { type: "text"; content: string }
+  | { type: "agent"; name: string; content: string };
+
 function StepIcon({ status, name }: { status: RunStep["status"]; name: string }) {
   const isAgentCall = name.startsWith("Chamando:");
   if (status === "running") return isAgentCall
@@ -19,7 +23,7 @@ function StepIcon({ status, name }: { status: RunStep["status"]; name: string })
   if (status === "done") return isAgentCall
     ? <Bot size={15} className="text-yellow-400" />
     : <CheckCircle size={15} className="text-green-400" />;
-  if (status === "failed")  return <XCircle size={15} className="text-red-400" />;
+  if (status === "failed") return <XCircle size={15} className="text-red-400" />;
   return <Clock size={15} className="text-slate-600" />;
 }
 
@@ -27,29 +31,26 @@ export default function RunModal({ agentId, agentName, onClose, onRunStart, onRu
   const [input, setInput] = useState("");
   const [run, setRun] = useState<AgentRun | null>(null);
   const [steps, setSteps] = useState<RunStep[]>([]);
-  const [output, setOutput] = useState("");
+  const [blocks, setBlocks] = useState<OutputBlock[]>([]);
   const [status, setStatus] = useState<"idle" | "running" | "done" | "failed">("idle");
   const [fallbackProvider, setFallbackProvider] = useState<string | null>(null);
   const outputRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | null>(null);
 
-  useEffect(() => {
-    return () => esRef.current?.close();
-  }, []);
+  useEffect(() => { return () => esRef.current?.close(); }, []);
 
   useEffect(() => {
     if (outputRef.current) {
       outputRef.current.scrollTop = outputRef.current.scrollHeight;
     }
-  }, [output]);
+  }, [blocks]);
 
   async function startRun() {
     if (!input.trim() || status === "running") return;
     setStatus("running");
     setSteps([]);
-    setOutput("");
+    setBlocks([]);
     setFallbackProvider(null);
-
     try {
       const newRun = await api.runs.create(agentId, input.trim());
       setRun(newRun);
@@ -74,15 +75,31 @@ export default function RunModal({ agentId, agentName, onClose, onRunStart, onRu
           next[event.index] = event.step;
           return next;
         });
+
       } else if (event.type === "fallback") {
         setFallbackProvider(event.provider);
+
       } else if (event.type === "token") {
-        setOutput((prev) => prev + event.content);
+        setBlocks((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.type === "text") {
+            return [...prev.slice(0, -1), { type: "text", content: last.content + event.content }];
+          }
+          return [...prev, { type: "text", content: event.content }];
+        });
+
+      } else if (event.type === "agent_output") {
+        setBlocks((prev) => [
+          ...prev,
+          { type: "agent", name: event.agent_name, content: event.content },
+        ]);
+
       } else if (event.type === "done") {
         setStatus("done");
         setRun((r) => r ? { ...r, status: "done", output: event.output } : r);
         onRunEnd({ ...run!, status: "done", output: event.output });
         es.close();
+
       } else if (event.type === "error") {
         setStatus("failed");
         onRunEnd({ ...run!, status: "failed" });
@@ -90,12 +107,10 @@ export default function RunModal({ agentId, agentName, onClose, onRunStart, onRu
       }
     };
 
-    es.onerror = () => {
-      setStatus("failed");
-      es.close();
-    };
+    es.onerror = () => { setStatus("failed"); es.close(); };
   }
 
+  const hasOutput = blocks.length > 0;
   const canRun = status === "idle" || status === "done" || status === "failed";
 
   return (
@@ -124,11 +139,13 @@ export default function RunModal({ agentId, agentName, onClose, onRunStart, onRu
             )}
             {steps.map((step, i) => (
               <div key={i} className="flex items-start gap-2">
-                <div className="mt-0.5"><StepIcon status={step.status} name={step.name} /></div>
+                <div className="mt-0.5">
+                  <StepIcon status={step.status} name={step.name} />
+                </div>
                 <div>
                   <p className={`text-xs font-medium ${
                     step.status === "running" ? "text-accent" :
-                    step.status === "done"    ? "text-green-400" :
+                    step.status === "done"    ? step.name.startsWith("Chamando:") ? "text-yellow-400" : "text-green-400" :
                     step.status === "failed"  ? "text-red-400" : "text-slate-500"
                   }`}>{step.name}</p>
                   {step.started_at && (
@@ -145,17 +162,32 @@ export default function RunModal({ agentId, agentName, onClose, onRunStart, onRu
 
           {/* Right — output */}
           <div className="flex-1 flex flex-col min-h-0">
-            <div
-              ref={outputRef}
-              className="flex-1 overflow-y-auto p-5 font-mono text-sm text-slate-300 whitespace-pre-wrap leading-relaxed"
-            >
-              {output || (
-                <span className="text-slate-600">
+            <div ref={outputRef} className="flex-1 overflow-y-auto p-5 flex flex-col gap-3">
+              {!hasOutput && (
+                <span className="font-mono text-sm text-slate-600">
                   {status === "running" ? "Aguardando resposta..." : "A saída do agent aparecerá aqui."}
                 </span>
               )}
-              {status === "running" && output && (
-                <span className="inline-block w-2 h-4 bg-accent ml-0.5 animate-pulse" />
+
+              {blocks.map((block, i) =>
+                block.type === "text" ? (
+                  <span key={i} className="font-mono text-sm text-slate-300 whitespace-pre-wrap leading-relaxed">
+                    {block.content}
+                    {status === "running" && i === blocks.length - 1 && (
+                      <span className="inline-block w-2 h-4 bg-accent ml-0.5 animate-pulse align-middle" />
+                    )}
+                  </span>
+                ) : (
+                  <div key={i} className="border border-yellow-500/25 rounded-xl overflow-hidden bg-yellow-500/5">
+                    <div className="flex items-center gap-2 px-4 py-2 border-b border-yellow-500/20 bg-yellow-500/10">
+                      <Bot size={13} className="text-yellow-400" />
+                      <span className="text-xs font-semibold text-yellow-400">{block.name}</span>
+                    </div>
+                    <pre className="px-4 py-3 text-sm text-slate-300 whitespace-pre-wrap leading-relaxed font-mono">
+                      {block.content}
+                    </pre>
+                  </div>
+                )
               )}
             </div>
 

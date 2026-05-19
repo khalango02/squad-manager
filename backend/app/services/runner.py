@@ -311,6 +311,11 @@ async def execute_run(run_id: str) -> None:
                     await publish(run_id, {
                         "type": "step_update", "step": step_call, "index": step_call_idx,
                     })
+                    await publish(run_id, {
+                        "type": "agent_output",
+                        "agent_name": ca["name"],
+                        "content": sub_result,
+                    })
 
                     tool_results.append({
                         "type": "tool_result",
