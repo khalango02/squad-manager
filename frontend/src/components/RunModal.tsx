@@ -24,6 +24,7 @@ export default function RunModal({ agentId, agentName, onClose, onRunStart, onRu
   const [steps, setSteps] = useState<RunStep[]>([]);
   const [output, setOutput] = useState("");
   const [status, setStatus] = useState<"idle" | "running" | "done" | "failed">("idle");
+  const [fallbackProvider, setFallbackProvider] = useState<string | null>(null);
   const outputRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | null>(null);
 
@@ -42,6 +43,7 @@ export default function RunModal({ agentId, agentName, onClose, onRunStart, onRu
     setStatus("running");
     setSteps([]);
     setOutput("");
+    setFallbackProvider(null);
 
     try {
       const newRun = await api.runs.create(agentId, input.trim());
@@ -67,6 +69,8 @@ export default function RunModal({ agentId, agentName, onClose, onRunStart, onRu
           next[event.index] = event.step;
           return next;
         });
+      } else if (event.type === "fallback") {
+        setFallbackProvider(event.provider);
       } else if (event.type === "token") {
         setOutput((prev) => prev + event.content);
       } else if (event.type === "done") {
@@ -152,12 +156,19 @@ export default function RunModal({ agentId, agentName, onClose, onRunStart, onRu
 
             {/* Status bar */}
             {status !== "idle" && (
-              <div className={`px-5 py-2 text-xs border-t border-border ${
+              <div className={`px-5 py-2 text-xs border-t border-border flex items-center gap-3 ${
                 status === "running" ? "text-accent" :
                 status === "done"    ? "text-green-400" : "text-red-400"
               }`}>
-                {status === "running" ? "Processando..." :
-                 status === "done"    ? "Concluído" : "Falhou"}
+                <span>
+                  {status === "running" ? "Processando..." :
+                   status === "done"    ? "Concluído" : "Falhou"}
+                </span>
+                {fallbackProvider && (
+                  <span className="px-2 py-0.5 rounded bg-yellow-500/15 text-yellow-400 border border-yellow-500/30">
+                    via OpenAI (fallback)
+                  </span>
+                )}
               </div>
             )}
           </div>

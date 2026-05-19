@@ -5,6 +5,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 import anthropic
+import openai
 
 from app.config import settings
 from app.database import SessionLocal
@@ -14,6 +15,11 @@ logger = logging.getLogger(__name__)
 
 _subscribers: dict[str, list[asyncio.Queue]] = defaultdict(list)
 _claude = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+
+
+def _is_billing_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "credit balance" in msg or "insufficient_quota" in msg or "billing" in msg
 
 
 # ── Pub/sub ───────────────────────────────────────────────────────────────────
@@ -131,15 +137,40 @@ async def execute_run(run_id: str) -> None:
         output_parts: list[str] = []
 
         try:
-            async with _claude.messages.stream(
-                model=settings.claude_model,
-                max_tokens=8096,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_input}],
-            ) as stream:
-                async for text in stream.text_stream:
-                    output_parts.append(text)
-                    await publish(run_id, {"type": "token", "content": text, "index": 1})
+            try:
+                async with _claude.messages.stream(
+                    model=settings.claude_model,
+                    max_tokens=8096,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": user_input}],
+                ) as stream:
+                    async for text in stream.text_stream:
+                        output_parts.append(text)
+                        await publish(run_id, {"type": "token", "content": text, "index": 1})
+
+            except Exception as exc:
+                if not _is_billing_error(exc) or not settings.openai_api_key:
+                    raise
+
+                logger.warning("Run %s: Anthropic billing error, falling back to OpenAI", run_id)
+                output_parts.clear()
+                await publish(run_id, {"type": "fallback", "provider": "openai"})
+
+                _openai = openai.AsyncOpenAI(api_key=settings.openai_api_key)
+                stream = await _openai.chat.completions.create(
+                    model=settings.openai_model,
+                    max_tokens=8096,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_input},
+                    ],
+                    stream=True,
+                )
+                async for chunk in stream:
+                    text = chunk.choices[0].delta.content or ""
+                    if text:
+                        output_parts.append(text)
+                        await publish(run_id, {"type": "token", "content": text, "index": 1})
 
             step_proc = {**step_proc, "status": "done", "finished_at": _now_iso()}
             full_output = "".join(output_parts)
@@ -154,7 +185,7 @@ async def execute_run(run_id: str) -> None:
             await publish(run_id, {"type": "done", "output": full_output})
 
         except Exception as exc:
-            logger.exception("Run %s failed during Claude call: %s", run_id, exc)
+            logger.exception("Run %s failed during LLM call: %s", run_id, exc)
             step_proc = {**step_proc, "status": "failed", "finished_at": _now_iso()}
             await asyncio.to_thread(
                 _db_update, run_id,

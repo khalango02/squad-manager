@@ -9,8 +9,8 @@ on:
 env:
   ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
   RESOURCE_GROUP: ${{ secrets.RESOURCE_GROUP }}
-  BACKEND_APP: squad-manager-backend
-  FRONTEND_APP: squad-manager-frontend
+  BACKEND_APP: squad-backend
+  FRONTEND_APP: squad-frontend
 
 jobs:
   # ── Security scanning ──────────────────────────────────────────────────────

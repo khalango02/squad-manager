@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     max_request_body_bytes: int = 2 * 1024 * 1024  # 2 MB
     anthropic_api_key: str
     claude_model: str = "claude-sonnet-4-6"
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4o"
 
     class Config:
         env_file = ".env"
