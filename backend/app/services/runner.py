@@ -125,6 +125,7 @@ def _db_get_run_and_agent(run_id: str):
             if not target:
                 continue
             connected.append({
+                "id": str(target.id),
                 "tool_name": _sanitize_tool_name(target.name, str(target.id)),
                 "name": target.name,
                 "description": target.description or "",
@@ -313,6 +314,7 @@ async def execute_run(run_id: str) -> None:
                     })
                     await publish(run_id, {
                         "type": "agent_output",
+                        "agent_id": ca["id"],
                         "agent_name": ca["name"],
                         "content": sub_result,
                     })
