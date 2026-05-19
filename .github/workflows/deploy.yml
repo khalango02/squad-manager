@@ -2,9 +2,9 @@ name: Security checks & Deploy to Azure
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
-    branches: [main]
+    branches: [master]
 
 env:
   ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
