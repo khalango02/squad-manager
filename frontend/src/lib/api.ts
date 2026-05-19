@@ -75,8 +75,6 @@ export type AgentRun = {
   finished_at: string | null;
 };
 
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-
 export function createRunStream(runId: string): EventSource {
   return new EventSource(`${BASE}/runs/${runId}/stream`, { withCredentials: true });
 }

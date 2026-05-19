@@ -1,4 +1,3 @@
-import asyncio
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -37,14 +36,10 @@ def create_run(
     db.commit()
     db.refresh(run)
 
-    run_id = str(run.id)
-    background_tasks.add_task(_run_in_event_loop, run_id)
+    # Pass the async coroutine directly — FastAPI/Starlette will await it
+    # in the running event loop, allowing pub/sub queues to work correctly
+    background_tasks.add_task(execute_run, str(run.id))
     return run
-
-
-def _run_in_event_loop(run_id: str) -> None:
-    """Bridge sync BackgroundTask to async execute_run."""
-    asyncio.get_event_loop().run_until_complete(execute_run(run_id))
 
 
 @router.get("/agents/{agent_id}", response_model=list[RunOut])

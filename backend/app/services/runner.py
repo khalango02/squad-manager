@@ -12,9 +12,7 @@ from app.models import Agent, AgentRun
 
 logger = logging.getLogger(__name__)
 
-# In-memory pub/sub: run_id -> list of subscriber queues
 _subscribers: dict[str, list[asyncio.Queue]] = defaultdict(list)
-
 _claude = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
 
 
@@ -42,7 +40,7 @@ def unsubscribe(run_id: str, q: asyncio.Queue) -> None:
         _subscribers.pop(run_id, None)
 
 
-# ── SSE stream generator ──────────────────────────────────────────────────────
+# ── SSE stream ────────────────────────────────────────────────────────────────
 
 async def sse_stream(
     run_id: str,
@@ -50,7 +48,6 @@ async def sse_stream(
     initial_status: str,
     initial_output: str,
 ):
-    # Replay existing state for clients that connect mid-run or after completion
     for i, step in enumerate(initial_steps):
         yield f"data: {json.dumps({'type': 'step_update', 'step': step, 'index': i})}\n\n"
 
@@ -73,44 +70,66 @@ async def sse_stream(
         unsubscribe(run_id, q)
 
 
-# ── Agent execution ───────────────────────────────────────────────────────────
+# ── DB helpers (sync, called via asyncio.to_thread) ──────────────────────────
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-async def execute_run(run_id: str) -> None:
+def _db_update(run_id: str, **fields) -> None:
     db = SessionLocal()
     try:
-        run: AgentRun = db.query(AgentRun).filter(AgentRun.id == run_id).first()
+        db.query(AgentRun).filter(AgentRun.id == run_id).update(fields)
+        db.commit()
+    finally:
+        db.close()
+
+
+def _db_get_run_and_agent(run_id: str):
+    db = SessionLocal()
+    try:
+        run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
         if not run:
+            return None, None
+        agent = db.query(Agent).filter(Agent.id == run.agent_id).first()
+        return (run.input, agent.md_content if agent else "")
+    finally:
+        db.close()
+
+
+# ── Agent execution ───────────────────────────────────────────────────────────
+
+async def execute_run(run_id: str) -> None:
+    try:
+        # Fetch data from DB in a thread (sync SQLAlchemy)
+        user_input, agent_md = await asyncio.to_thread(_db_get_run_and_agent, run_id)
+        if user_input is None:
             return
-        agent: Agent = db.query(Agent).filter(Agent.id == run.agent_id).first()
 
         # ── Step 1: Loading context ───────────────────────────────────────
-        step_load = {"name": "Carregando contexto", "status": "running", "started_at": _now_iso(), "finished_at": None}
-        run.steps = [step_load]
-        run.status = "running"
-        db.commit()
-        await publish(run_id, {"type": "step_update", "step": step_load, "index": 0})
+        step_load = {"name": "Carregando contexto", "status": "running",
+                     "started_at": _now_iso(), "finished_at": None}
+        steps = [step_load]
 
+        await asyncio.to_thread(_db_update, run_id, status="running", steps=steps)
+        await publish(run_id, {"type": "step_update", "step": step_load, "index": 0})
         await asyncio.sleep(0.3)
 
         step_load = {**step_load, "status": "done", "finished_at": _now_iso()}
-        run.steps = [step_load]
-        db.commit()
+        steps = [step_load]
+        await asyncio.to_thread(_db_update, run_id, steps=steps)
         await publish(run_id, {"type": "step_update", "step": step_load, "index": 0})
 
         # ── Step 2: Processing ────────────────────────────────────────────
-        step_proc = {"name": "Processando", "status": "running", "started_at": _now_iso(), "finished_at": None}
-        run.steps = [step_load, step_proc]
-        db.commit()
+        step_proc = {"name": "Processando", "status": "running",
+                     "started_at": _now_iso(), "finished_at": None}
+        steps = [step_load, step_proc]
+        await asyncio.to_thread(_db_update, run_id, steps=steps)
         await publish(run_id, {"type": "step_update", "step": step_proc, "index": 1})
 
-        system_prompt = (agent.md_content or "").strip() or "You are a helpful assistant."
-        user_input = run.input
-
+        system_prompt = (agent_md or "").strip() or "You are a helpful assistant."
         output_parts: list[str] = []
+
         try:
             async with _claude.messages.stream(
                 model=settings.claude_model,
@@ -123,28 +142,29 @@ async def execute_run(run_id: str) -> None:
                     await publish(run_id, {"type": "token", "content": text, "index": 1})
 
             step_proc = {**step_proc, "status": "done", "finished_at": _now_iso()}
-            run.steps = [step_load, step_proc]
-            run.output = "".join(output_parts)
-            run.status = "done"
-            run.finished_at = datetime.now(timezone.utc)
-            db.commit()
-
+            full_output = "".join(output_parts)
+            await asyncio.to_thread(
+                _db_update, run_id,
+                steps=[step_load, step_proc],
+                output=full_output,
+                status="done",
+                finished_at=datetime.now(timezone.utc),
+            )
             await publish(run_id, {"type": "step_update", "step": step_proc, "index": 1})
-            await publish(run_id, {"type": "done", "output": run.output})
+            await publish(run_id, {"type": "done", "output": full_output})
 
         except Exception as exc:
             logger.exception("Run %s failed during Claude call: %s", run_id, exc)
             step_proc = {**step_proc, "status": "failed", "finished_at": _now_iso()}
-            run.steps = [step_load, step_proc]
-            run.status = "failed"
-            run.finished_at = datetime.now(timezone.utc)
-            db.commit()
-
+            await asyncio.to_thread(
+                _db_update, run_id,
+                steps=[step_load, step_proc],
+                status="failed",
+                finished_at=datetime.now(timezone.utc),
+            )
             await publish(run_id, {"type": "step_update", "step": step_proc, "index": 1})
             await publish(run_id, {"type": "error", "message": str(exc)})
 
     except Exception as exc:
         logger.exception("Unexpected error in run %s: %s", run_id, exc)
         await publish(run_id, {"type": "error", "message": "Internal error"})
-    finally:
-        db.close()
