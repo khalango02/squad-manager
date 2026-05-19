@@ -3,7 +3,6 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, LogOut, Network } from "lucide-react";
 import { api, type Agent, type Connection } from "@/lib/api";
-import { clearToken, getToken } from "@/lib/auth";
 import AgentCard from "@/components/AgentCard";
 import dynamic from "next/dynamic";
 
@@ -18,7 +17,8 @@ export default function DashboardPage() {
   const [newName, setNewName] = useState("");
 
   useEffect(() => {
-    if (!getToken()) { router.replace("/login"); return; }
+    api.auth.me()
+      .catch(() => router.replace("/login"));
     Promise.all([api.agents.list(), api.connections.list()]).then(([a, c]) => {
       setAgents(a);
       setConnections(c);
@@ -50,8 +50,8 @@ export default function DashboardPage() {
     setConnections((prev) => prev.filter((c) => c.id !== connectionId));
   }
 
-  function logout() {
-    clearToken();
+  async function logout() {
+    await api.auth.logout();
     router.push("/login");
   }
 
@@ -92,6 +92,7 @@ export default function DashboardPage() {
               placeholder="Agent name..."
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
+              maxLength={100}
               className="flex-1 px-4 py-2.5 bg-card border border-accent rounded-lg text-white placeholder-slate-500 focus:outline-none"
             />
             <button type="submit" className="px-4 py-2.5 bg-accent hover:bg-accent-hover text-white rounded-lg transition-colors text-sm">
@@ -105,7 +106,9 @@ export default function DashboardPage() {
 
         {showGraph && agents.length > 0 && (
           <div className="mb-10">
-            <h2 className="text-sm font-medium text-slate-400 mb-3">Agent connections — click an edge to remove it, drag between agents to connect</h2>
+            <h2 className="text-sm font-medium text-slate-400 mb-3">
+              Agent connections — drag between agents to connect, click an edge to remove
+            </h2>
             <ConnectionGraph
               agents={agents}
               connections={connections}

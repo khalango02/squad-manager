@@ -1,14 +1,11 @@
-import Cookies from "js-cookie";
-
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = Cookies.get("token");
   const res = await fetch(`${BASE}${path}`, {
     ...init,
+    credentials: "include", // send httpOnly cookie automatically
     headers: {
       "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...init?.headers,
     },
   });
@@ -19,6 +16,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (res.status === 204) return undefined as T;
   return res.json();
 }
+
+export type User = {
+  id: string;
+  email: string;
+  is_active: boolean;
+  created_at: string;
+};
 
 export type Agent = {
   id: string;
@@ -38,30 +42,27 @@ export type Connection = {
   created_at: string;
 };
 
-export type Token = { access_token: string; token_type: string };
-
 export const api = {
   auth: {
-    login: (email: string, password: string) => {
-      const body = new URLSearchParams({ username: email, password });
-      return request<Token>("/auth/login", {
-        method: "POST",
-        body,
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      });
-    },
-    register: (email: string, password: string) =>
-      request("/auth/register", {
+    login: (email: string, password: string) =>
+      request<User>("/auth/login", {
         method: "POST",
         body: JSON.stringify({ email, password }),
       }),
+    register: (email: string, password: string) =>
+      request<User>("/auth/register", {
+        method: "POST",
+        body: JSON.stringify({ email, password }),
+      }),
+    logout: () => request<void>("/auth/logout", { method: "POST" }),
+    me: () => request<User>("/auth/me"),
   },
   agents: {
     list: () => request<Agent[]>("/agents/"),
     get: (id: string) => request<Agent>(`/agents/${id}`),
     create: (data: { name: string; description?: string; md_content?: string }) =>
       request<Agent>("/agents/", { method: "POST", body: JSON.stringify(data) }),
-    update: (id: string, data: Partial<Agent>) =>
+    update: (id: string, data: Partial<Pick<Agent, "name" | "description" | "md_content">>) =>
       request<Agent>(`/agents/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
     delete: (id: string) => request<void>(`/agents/${id}`, { method: "DELETE" }),
   },

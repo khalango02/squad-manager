@@ -1,12 +1,14 @@
 "use client";
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { getToken } from "@/lib/auth";
+import { api } from "@/lib/api";
 
 export default function Home() {
   const router = useRouter();
   useEffect(() => {
-    router.replace(getToken() ? "/dashboard" : "/login");
+    api.auth.me()
+      .then(() => router.replace("/dashboard"))
+      .catch(() => router.replace("/login"));
   }, [router]);
   return null;
 }

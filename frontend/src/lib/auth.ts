@@ -1,13 +1,6 @@
-import Cookies from "js-cookie";
+// Token is stored as an httpOnly cookie by the backend.
+// The browser sends it automatically — never read or write it from JS.
 
-export function saveToken(token: string) {
-  Cookies.set("token", token, { expires: 1, sameSite: "strict" });
-}
-
-export function clearToken() {
-  Cookies.remove("token");
-}
-
-export function getToken() {
-  return Cookies.get("token");
+export function isAuthError(status: number) {
+  return status === 401 || status === 403;
 }

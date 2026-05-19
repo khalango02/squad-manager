@@ -1,19 +1,19 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class AgentCreate(BaseModel):
-    name: str
-    description: str | None = None
-    md_content: str = ""
+    name: str = Field(min_length=1, max_length=100)
+    description: str | None = Field(default=None, max_length=255)
+    md_content: str = Field(default="", max_length=500_000)
 
 
 class AgentUpdate(BaseModel):
-    name: str | None = None
-    description: str | None = None
-    md_content: str | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    description: str | None = Field(default=None, max_length=255)
+    md_content: str | None = Field(default=None, max_length=500_000)
 
 
 class AgentOut(BaseModel):

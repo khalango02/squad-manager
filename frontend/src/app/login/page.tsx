@@ -2,7 +2,6 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
-import { saveToken } from "@/lib/auth";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -20,8 +19,8 @@ export default function LoginPage() {
       if (mode === "register") {
         await api.auth.register(email, password);
       }
-      const { access_token } = await api.auth.login(email, password);
-      saveToken(access_token);
+      await api.auth.login(email, password);
+      // Cookie is set by backend — no token handling in JS
       router.push("/dashboard");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong");
@@ -45,6 +44,7 @@ export default function LoginPage() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required
+            autoComplete="email"
             className="w-full px-4 py-3 bg-surface border border-border rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-accent"
           />
           <input
@@ -53,8 +53,14 @@ export default function LoginPage() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
+            autoComplete={mode === "login" ? "current-password" : "new-password"}
             className="w-full px-4 py-3 bg-surface border border-border rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-accent"
           />
+          {mode === "register" && (
+            <p className="text-xs text-slate-500">
+              Min 8 characters, with uppercase, lowercase and a digit.
+            </p>
+          )}
           {error && <p className="text-red-400 text-sm">{error}</p>}
           <button
             type="submit"
@@ -68,7 +74,7 @@ export default function LoginPage() {
         <p className="mt-6 text-center text-slate-400 text-sm">
           {mode === "login" ? "Don't have an account?" : "Already have an account?"}{" "}
           <button
-            onClick={() => setMode(mode === "login" ? "register" : "login")}
+            onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(""); }}
             className="text-accent hover:underline"
           >
             {mode === "login" ? "Register" : "Sign in"}
